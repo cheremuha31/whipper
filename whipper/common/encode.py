@@ -141,10 +141,6 @@ class EmbedPictureTask(task.Task):
         pic.type = PictureType.COVER_FRONT
         pic.mime = mime
         pic.width, pic.height = im.size
-        if im.mode not in ('P', 'RGB', 'SRGB'):
-            logger.warning("no cover art will be added because the fetched "
-                           "image mode is unsupported")
-            return
 
         return pic
 
