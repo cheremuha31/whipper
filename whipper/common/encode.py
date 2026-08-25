@@ -21,6 +21,7 @@
 
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import PictureType
+from io import BytesIO
 
 from whipper.extern.task import task
 
@@ -94,6 +95,7 @@ class TaggingTask(task.Task):
 
 class EmbedPictureTask(task.Task):
     description = 'Embed picture to FLAC'
+    EMBED_MAX_EDGE = 1000
 
     def __init__(self, track_path, cover_art_path):
         self.track_path = track_path
@@ -135,12 +137,24 @@ class EmbedPictureTask(task.Task):
             return
 
         pic = Picture()
-        with open(cover_art_filename, 'rb') as f:
-            pic.data = f.read()
-
         pic.type = PictureType.COVER_FRONT
-        pic.mime = mime
-        pic.width, pic.height = im.size
+
+        if max(im.size) > EmbedPictureTask.EMBED_MAX_EDGE:
+            edge = EmbedPictureTask.EMBED_MAX_EDGE
+            thumb = im.convert('RGB')
+            thumb.thumbnail((edge, edge), Image.LANCZOS)
+            buffer = BytesIO()
+            # subsampling=0 means 4:4:4: without it, the rich red appears muddy
+            thumb.save(buffer, 'JPEG', quality=90, subsampling=0,
+                       optimize=True)
+            pic.data = buffer.getvalue()
+            pic.mime = 'image/jpeg'
+            pic.width, pic.height = thumb.size
+        else:
+            with open(cover_art_filename, 'rb') as f:
+                pic.data = f.read()
+            pic.mime = mime
+            pic.width, pic.height = im.size
 
         return pic
 
