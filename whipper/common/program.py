@@ -25,7 +25,9 @@ import re
 import os
 import shutil
 import time
+import statistics
 
+from io import BytesIO
 from tempfile import NamedTemporaryFile
 from packaging.version import Version
 
@@ -49,11 +51,15 @@ class Program:
 
     :vartype metadata: mbngs.DiscMetadata
     :cvar result: the rip's result
+    :cvar MAX_COVER_CANDIDATES: how many covers to fetch before choosing
+    :cvar COVER_COMPARE_SIZE: edge of the thumbnail used to compare covers
     :vartype result: result.RipResult
     :vartype outdir: str
     :vartype config: whipper.common.config.Config
     """
 
+    MAX_COVER_CANDIDATES = 12
+    COVER_COMPARE_SIZE = 64
     cuePath = None
     logPath = None
     metadata = None
@@ -513,9 +519,88 @@ class Program:
         return start, stop
 
     @staticmethod
+    def _getFrontCovers(release_id):
+        """
+        List front covers from every release in the same release group
+
+        :param release_id: the release id the disc matched
+        :type  release_id: str
+        :returns: (release id, image id) pairs, own release first
+        :rtype: list of (str, str)
+        """
+
+        release_ids = [release_id]
+
+        try:
+            release = musicbrainzngs.get_release_by_id(
+                release_id, includes=['release-groups']
+            )
+            group_id = release['release']['release-group']['id']
+            group = musicbrainzngs.browse_releases(
+                release_group=group_id, limit=100)
+
+            for other in group['release-list']:
+                if other['id'] != release_id:
+                    release_ids.append(other['id'])
+        except (musicbrainzngs.WebServiceError, KeyError) as e:
+            logger.debug('cannot list the release group: %r', e)
+
+        covers = []
+        for mbid in release_ids:
+            try:
+                image_list = musicbrainzngs.get_image_list(mbid)
+            except musicbrainzngs.WebServiceError:
+                continue
+            for img in image_list['images']:
+                if img.get('types') != ['Front']:
+                    continue
+                if not img.get('id'):
+                    continue
+                covers.append((mbid, str(img['id'])))
+                if len(covers) == Program.MAX_COVER_CANDIDATES:
+                    return covers
+        return covers
+
+    @staticmethod
+    def _coverThumb(data):
+        """
+        Shrink a cover to a fixed square so covers can be compared
+
+        :param data: raw image bytes
+        :type  data: bytes
+        :returns: (pixel list, original pixel count); (None, 0) if unreadable
+        :rtype: tuple
+        """
+        from PIL import Image
+        try:
+            image = Image.open(BytesIO(data))
+            image.load()
+        except (OSError, Image.DecompressionBombError) as e:
+            logger.debug('unreadable cover candidate: %r', e)
+            return None, 0
+
+        pixels = image.width * image.height
+        size = Program.COVER_COMPARE_SIZE
+        thumb = image.convert('RGB').resize((size, size), Image.LANCZOS)
+        return list(thumb.getdata()), pixels
+
+    @staticmethod
+    def _thumbDistance(one, other):
+        """
+        Tell how different two shrunk covers are
+
+        :returns: mean per-channel difference, 0 when identical
+        :rtype: float
+        """
+        total = 0
+        for a, b in zip(one, other):
+            total += abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+        return total / (len(one) * 3)
+
+    @staticmethod
     def getCoverArt(path, release_id):
         """
-        Get cover art image from Cover Art Archive.
+        Get the best cover art from release group
 
         :param path: where to store the fetched image
         :type  path: str
@@ -524,23 +609,61 @@ class Program:
         :returns: path to the downloaded cover art, else `None`
         :rtype: str or None
         """
-        cover_art_path = os.path.join(path, 'cover.jpg')
-
         logger.debug('fetching cover art for release: %r', release_id)
-        try:
-            data = musicbrainzngs.get_image_front(release_id, 500)
-        except musicbrainzngs.WebServiceError as e:
-            logger.error('error fetching cover art: %r', e)
+
+        thumbs = []
+        sizes = []
+        blobs = []
+        for mbid, image_id in Program._getFrontCovers(release_id):
+            try:
+                data = musicbrainzngs.get_image(mbid, image_id)
+            except musicbrainzngs.WebServiceError as e:
+                logger.error('error fetching cover %s: %r', image_id, e)
+                continue
+            thumb, pixels = Program._coverThumb(data)
+            if thumb is None:
+                continue
+            thumbs.append(thumb)
+            sizes.append(pixels)
+            blobs.append(data)
+
+        if not blobs:
+            logger.error('no cover art found for release %r', release_id)
             return
 
-        if data:
-            with NamedTemporaryFile(suffix='.cover.jpg', delete=False) as f:
-                f.write(data)
-            os.chmod(f.name, 0o644)
-            shutil.move(f.name, cover_art_path)
-            logger.debug('cover art fetched at: %r', cover_art_path)
-            return cover_art_path
-        return
+        if len(blobs) < 3:
+            # if there is nothing to compare with we take the largest one
+            best = sizes.index(max(sizes))
+        else:
+            spread = []
+            for i in range(len(thumbs)):
+                others = []
+                for j in range(len(thumbs)):
+                    if i != j:
+                        others.append(
+                            Program._thumbDistance(thumbs[i], thumbs[j]))
+
+                spread.append(sum(others) / len(others))
+
+            limit = statistics.median(spread)
+
+            best = None
+            for i in range(len(blobs)):
+                if spread[i] > limit:
+                    continue
+                if best is None or sizes[i] > sizes[best]:
+                    best = i
+
+        logger.debug('picked cover with %d pixels out of %d candidates',
+                     sizes[best], len(blobs))
+
+        cover_art_path = os.path.join(path, 'cover.jpg')
+        with NamedTemporaryFile(suffix='.cover.jpg', delete=False) as f:
+            f.write(blobs[best])
+        os.chmod(f.name, 0o644)
+        shutil.move(f.name, cover_art_path)
+        logger.debug('cover art fetched at: %r', cover_art_path)
+        return cover_art_path
 
     @staticmethod
     def verifyTrack(runner, trackResult):
