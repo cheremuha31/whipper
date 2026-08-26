@@ -333,6 +333,15 @@ class Program:
             logger.warning('continuing without metadata')
 
         if metadatas:
+            seen = {md.mbid for md in metadatas}
+            for md in list(metadatas):
+                for extra in mbngs.latinReleases(md.mbid, md.discNumber,
+                                                 len(md.tracks),
+                                                 record=self._record):
+                    if extra.mbid not in seen:
+                        seen.add(extra.mbid)
+                        metadatas.append(extra)
+
             deltas = {}
 
             print('\nMatching releases:')

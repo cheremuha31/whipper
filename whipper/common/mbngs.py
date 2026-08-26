@@ -232,7 +232,7 @@ def _getPerformers(recording):
     return sorted(performers)  # convert to list: mutagen doesn't support set
 
 
-def _getMetadata(release, discid=None, country=None):
+def _getMetadata(release, discid=None, country=None, position=None):
     """
     Get disc metadata based upon the provided release id.
 
@@ -302,8 +302,10 @@ def _getMetadata(release, discid=None, country=None):
 
     # only show discs from medium-list->disc-list with matching discid
     for medium in release['medium-list']:
-        for disc in medium['disc-list']:
-            if discid is None or disc['id'] == discid:
+        if position is not None and int(medium['position']) != position:
+            continue
+        for disc in medium['disc-list'] or [None]:
+            if discid is None or (disc and disc['id'] == discid):
                 discMD.title = release['title']
                 discMD.releaseTitle = releaseTitle = discMD.title
                 if 'disambiguation' in release:
@@ -362,7 +364,8 @@ def _getMetadata(release, discid=None, country=None):
     return discMD
 
 
-def getReleaseMetadata(release_id, discid=None, country=None, record=False):
+def getReleaseMetadata(release_id, discid=None, country=None, record=False,
+                       position=None):
     """
     Return a DiscMetadata object based on MusicBrainz Release ID and Disc ID.
 
@@ -394,7 +397,7 @@ def getReleaseMetadata(release_id, discid=None, country=None, record=False):
     releaseDetail = res['release']
     formatted = json.dumps(releaseDetail, sort_keys=False, indent=4)
     logger.debug('release %s', formatted)
-    return _getMetadata(releaseDetail, discid, country)
+    return _getMetadata(releaseDetail, discid, country, position)
 
 
 # see http://bugs.musicbrainz.org/browser/python-musicbrainz2/trunk/examples/
@@ -453,3 +456,50 @@ def musicbrainz(discid, country=None, record=False):
     elif result.get('cdstub'):
         logger.debug('query returned cdstub: ignored')
     return None
+
+
+def latinReleases(release_id, position, track_count, record=False):
+    """
+    Find Latin-script releases of the same album for the same disc
+
+    :param release_id: the release the disc matched
+    :type  release_id: str
+    :param position: which disc of the release was matched
+    :type  position: int
+    :param track_count: how many tracks that disc has
+    :type  track_count: int
+    :returns: metadata of the Latin releases that carry the same disc
+    """
+    try:
+        release = musicbrainzngs.get_release_by_id(
+            release_id, includes=['release-groups']
+        )
+        group_id = release['release']['release-group']['id']
+        group = musicbrainzngs.browse_releases(
+            release_group=group_id, limit=100,
+            includes=['media'])['release-list']
+    except (musicbrainzngs.WebServiceError, KeyError) as e:
+        logger.debug('cannot list the release group: %r', e)
+        return []
+
+    found = []
+    for other in group:
+        if other['id'] == release_id:
+            continue
+        text = other.get('text-representation') or {}
+        if text.get('script') != 'Latn':
+            continue
+        media = other.get('medium-list') or []
+        if len(media) < position:
+            continue
+        if media[position - 1].get('track-count') != track_count:
+            continue
+        try:
+            md = getReleaseMetadata(other['id'], None, record=record,
+                                    position=position)
+        except musicbrainzngs.WebServiceError as e:
+            logger.debug('cannot read release %s: %r', other['id'], e)
+            continue
+        if md and md.tracks:
+            found.append(md)
+    return found
