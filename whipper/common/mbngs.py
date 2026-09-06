@@ -490,9 +490,12 @@ def latinReleases(release_id, position, track_count, record=False):
         if text.get('script') != 'Latn':
             continue
         media = other.get('medium-list') or []
-        if len(media) < position:
-            continue
-        if media[position - 1].get('track-count') != track_count:
+        medium = None
+        for m in media:
+            if int(m.get('position', 0)) == position:
+                medium = m
+                break
+        if medium is None or medium.get('track-count') != track_count:
             continue
         try:
             md = getReleaseMetadata(other['id'], None, record=record,
