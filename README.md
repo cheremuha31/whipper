@@ -1,4 +1,16 @@
-# Whipper
+# Whipper (fork)
+
+Fork of [whipper-team/whipper](https://github.com/whipper-team/whipper).
+Changes:
+
+- **Better cover art.** Compares the cover art of all editions of the album and selects the largest one that matches the rest, ensuring that a low-quality or incorrect scan from a single edition won't end up in your files.
+- **Smaller embedded cover.** Up to 1,000px in FLAC files; the `cover.jpg` file remains at full size.
+- **Any image mode.** Covers in CMYK and grayscale formats are embedded instead of being skipped.
+- **Latin-script editions.** For albums matched in Cyrillic, Japanese, etc., Latin-script editions of the same album are also offered.
+
+Install: `pip install git+https://github.com/cheremuha31/whipper@release-group`
+
+---
 
 [![license](https://img.shields.io/github/license/whipper-team/whipper.svg)](https://github.com/whipper-team/whipper/blob/develop/LICENSE)
 [![Build Status](https://travis-ci.com/whipper-team/whipper.svg?branch=develop)](https://travis-ci.com/whipper-team/whipper)
